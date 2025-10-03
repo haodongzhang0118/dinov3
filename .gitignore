@@ -17,6 +17,9 @@ dist/
 # Ignore vscode directory
 .vscode/
 
+# MacOS files
+.DS_Store
+
 # env
 .venv
 .python-version

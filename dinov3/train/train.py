@@ -575,6 +575,24 @@ def do_train(cfg, model, resume=False):
                     keep_checkpoint_copy(ckpt_dir / str(iteration))
 
         iteration = iteration + 1
+
+    # Save final checkpoint if we haven't just saved one
+    # This is requried for very short continued PT runs
+    final_iteration = iteration - 1
+    if final_iteration % cfg.checkpointing.period != 0:
+        logger.info("Saving final checkpoint at iteration %d", final_iteration)
+        torch.cuda.synchronize()
+        save_checkpoint(
+            ckpt_dir / "final",
+            iteration=final_iteration,
+            model=model,
+            optimizer=optimizer,
+            overwrite=True,
+            process_group=process_subgroup,
+        )
+        if distributed.is_subgroup_main_process():
+            keep_last_n_checkpoints(ckpt_dir, cfg.checkpointing.max_to_keep)
+
     metric_logger.synchronize_between_processes()
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
