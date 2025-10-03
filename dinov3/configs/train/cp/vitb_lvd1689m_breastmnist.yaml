@@ -3,8 +3,6 @@
 # runs with a total batch size of 2048 (64/gpu, 4 nodes here)
 # expected to run faster than ViT-L due to smaller model size
 
-# TODO: Add dataset params for breastmnist -> dataset string with split, crops: size and mean/std
-
 MODEL:
   META_ARCHITECTURE: SSLMetaArch
   DEVICE: cuda
