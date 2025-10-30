@@ -72,7 +72,7 @@ student:
   proj_bias: true
   ffn_bias: true
   norm_layer: layernorm
-  n_storage_tokens: 0
+  n_storage_tokens: 4
   mask_k_bias: false
   in_chans: 3
   pos_embed_type: rope
@@ -101,6 +101,7 @@ multidistillation:
   enabled: false
 cp:
   enabled: true
+  checkpoint_url: ""
   hf_model: 'facebook/dinov3-vitb16-pretrain-lvd1689m' 
 hrft:
   enabled: false

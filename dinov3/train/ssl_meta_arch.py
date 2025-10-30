@@ -157,8 +157,8 @@ class SSLMetaArch(nn.Module):
                     "Cannot use both continued pretraining (cp.enabled=True) "
                     "and student.resume_from_teacher_chkpt at the same time"
                 )
-            if not cfg.cp.hf_model:
-                raise ValueError("cp.hf_model must be specified when cp.enabled=True")
+            if not cfg.cp.hf_model and not cfg.cp.checkpoint_url:
+                raise ValueError("cp.hf_model or cp.checkpoint_url must be specified when cp.enabled=True")
             # NOTE: actual weights will be loaded in init_weights()
 
         # No grad is needed for these two
@@ -332,17 +332,24 @@ class SSLMetaArch(nn.Module):
         # Handle continued pretraining initialization
         if self.cfg.cp.enabled:
             logger.info("Initializing weights with continued pretraining")
-            # Load HuggingFace weights into student and teacher
-            hf_state_dict = load_huggingface_model(model_id=self.cfg.cp.hf_model, cfg=self.cfg)
 
-            # Create a filtered state dict for backbone only
-            backbone_state_dict = {}
-            for key, value in hf_state_dict.items():
-                if not key.startswith(("dino_head.", "ibot_head.")):
-                    backbone_state_dict[key] = value
+            if self.cfg.cp.checkpoint_url:
+                logger.info(f"Loading pretrained weights from official checkpoint: {self.cfg.cp.checkpoint_url}")
+                if self.cfg.hf_model:
+                    logger.warning(
+                        "Both cp.checkpoint_url and hf_model are set. cp.checkpoint_url will take precedence."
+                    )
+                state_dict = torch.hub.load_state_dict_from_url(
+                    self.cfg.cp.checkpoint_url, map_location="cpu", progress=True
+                )
+
+            elif self.cfg.cp.hf_model:
+                logger.info(f"Loading pretrained weights from HuggingFace model: {self.cfg.cp.hf_model}")
+                # Load HuggingFace weights into student and teacher
+                state_dict = load_huggingface_model(model_id=self.cfg.cp.hf_model, cfg=self.cfg)
 
             # Load into student
-            missing_keys, unexpected_keys = self.student.load_state_dict(backbone_state_dict, strict=False)
+            missing_keys, unexpected_keys = self.student.load_state_dict(state_dict, strict=False)
             logger.info(f"CP Student loading - Missing: {len(missing_keys)}, Unexpected: {len(unexpected_keys)}")
 
         self.model_ema.load_state_dict(self.student.state_dict())
