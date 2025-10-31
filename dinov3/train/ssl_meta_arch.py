@@ -333,7 +333,7 @@ class SSLMetaArch(nn.Module):
         if self.cfg.cp.enabled:
             logger.info("Initializing weights with continued pretraining")
 
-            elif self.cfg.cp.hf_model:
+            if self.cfg.cp.hf_model:
                 logger.info(f"Loading pretrained weights from HuggingFace model: {self.cfg.cp.hf_model}")
                 # Load HF model directly into FSDP backbone
                 load_huggingface_into_fsdp_model(
