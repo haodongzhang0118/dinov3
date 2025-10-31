@@ -17,7 +17,7 @@ from dinov3.configs import get_default_config
 from dinov3.data import DataAugmentationDINO
 from dinov3.fsdp.ac_compile_parallelize import ac_compile_parallelize
 from dinov3.layers.dino_head import DINOHead
-from dinov3.loaders import load_huggingface_model
+from dinov3.loaders import load_huggingface_into_fsdp_model
 from dinov3.loss import (
     DINOLoss,
     GramLoss,
@@ -333,25 +333,17 @@ class SSLMetaArch(nn.Module):
         if self.cfg.cp.enabled:
             logger.info("Initializing weights with continued pretraining")
 
-            if self.cfg.cp.checkpoint_url:
-                logger.info(f"Loading pretrained weights from official checkpoint: {self.cfg.cp.checkpoint_url}")
-                if self.cfg.cp.hf_model:
-                    logger.warning(
-                        "Both cp.checkpoint_url and hf_model are set. cp.checkpoint_url will take precedence."
-                    )
-                state_dict = torch.hub.load_state_dict_from_url(
-                    self.cfg.cp.checkpoint_url, map_location="cpu", progress=True
-                )
-
             elif self.cfg.cp.hf_model:
                 logger.info(f"Loading pretrained weights from HuggingFace model: {self.cfg.cp.hf_model}")
-                # Load HuggingFace weights into student and teacher
-                state_dict = load_huggingface_model(model_id=self.cfg.cp.hf_model, cfg=self.cfg)
-
-            # Load into student backbone
-            missing_keys, unexpected_keys = self.student.backbone.load_state_dict(state_dict, strict=False)
-
-            logger.info(f"CP Student loading - Missing: {missing_keys}, Unexpected: {unexpected_keys}")
+                # Load HF model directly into FSDP backbone
+                load_huggingface_into_fsdp_model(
+                    model=self.student.backbone,
+                    model_id=self.cfg.cp.hf_model,
+                    cfg=self.cfg,
+                    skip_load_keys=[],
+                    keys_not_sharded=["rope_embed.periods"],
+                    process_group=distributed.get_process_subgroup(),
+                )
 
         self.model_ema.load_state_dict(self.student.state_dict())
         if self.has_gram_teacher:

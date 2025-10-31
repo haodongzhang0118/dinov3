@@ -142,8 +142,9 @@ def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) 
                 continue
 
             # Handle mask token shape
+            # HF has [1, 1, 1, D], DINOv3 expects [1, D]
             if "mask_token" in new_key:
-                weight_tensor = weight_tensor.unsqueeze(1)
+                weight_tensor = weight_tensor.squeeze(1).squeeze(1)
 
             converted_state_dict[new_key] = weight_tensor
 
@@ -158,3 +159,67 @@ def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) 
     except Exception as e:
         error_msg = f"Failed to load HuggingFace model {model_id}: {str(e)}"
         raise RuntimeError(error_msg) from e
+
+
+def load_huggingface_into_fsdp_model(
+    model: torch.nn.Module,
+    model_id: str,
+    cfg,
+    *,
+    skip_load_keys: list[str] | None = None,
+    keys_not_sharded: list[str] | None = None,
+    process_group=None,
+):
+    """
+    Load a HuggingFace DINOv3 model directly into an FSDP-wrapped model.
+
+    Args:
+        model: FSDP-wrapped DINOv3 model (usually backbone)
+        model_id: HuggingFace model ID
+        cfg: DINOv3 config
+        skip_load_keys: Keys to skip when loading
+        keys_not_sharded: Keys that should not be distributed as DTensor
+        process_group: FSDP process group
+    """
+    import torch.distributed as dist
+    from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+
+    # Load and convert HF model to DINOv3 format
+    logger.info(f"Loading HuggingFace model {model_id} for FSDP")
+    state_dict = load_huggingface_model(model_id=model_id, cfg=cfg)
+
+    # Set up device mesh for DTensor distribution
+    if process_group is None:
+        world_mesh = init_device_mesh(
+            "cuda",
+            mesh_shape=(dist.get_world_size(),),
+            mesh_dim_names=("dp",),
+        )
+    else:
+        world_mesh = DeviceMesh.from_group(process_group, "cuda")
+
+    # Set defaults
+    if keys_not_sharded is None:
+        keys_not_sharded = []
+    if skip_load_keys is None:
+        skip_load_keys = []
+
+    # Convert regular tensors to DTensor (distributed)
+    distributed_state_dict = {
+        key: (
+            torch.distributed.tensor.distribute_tensor(tensor, world_mesh, src_data_rank=None)
+            if not any(k in key for k in keys_not_sharded)
+            else tensor
+        )
+        for key, tensor in state_dict.items()
+    }
+
+    # Filter out keys to skip and load into model
+    filtered_state_dict = {
+        key: tensor
+        for key, tensor in distributed_state_dict.items()
+        if not any(skip_key in key for skip_key in skip_load_keys)
+    }
+
+    model.load_state_dict(filtered_state_dict)
+    logger.info(f"Successfully loaded HF model into FSDP model")
