@@ -348,8 +348,8 @@ class SSLMetaArch(nn.Module):
                 # Load HuggingFace weights into student and teacher
                 state_dict = load_huggingface_model(model_id=self.cfg.cp.hf_model, cfg=self.cfg)
 
-            # Load into student
-            missing_keys, unexpected_keys = self.student.load_state_dict(state_dict, strict=False)
+            # Load into student backbone
+            missing_keys, unexpected_keys = self.student.backbone.load_state_dict(state_dict, strict=False)
 
             logger.info(f"CP Student loading - Missing: {missing_keys}, Unexpected: {unexpected_keys}")
 
