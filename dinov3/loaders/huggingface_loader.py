@@ -1,10 +1,6 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This software may be used and distributed in accordance with
-# the terms of the DINOv3 License Agreement.
-
 import logging
-from typing import Dict, Optional, Tuple
+import re
+from typing import Dict, Optional
 
 import torch
 from transformers import AutoModel
@@ -12,133 +8,107 @@ from transformers import AutoModel
 logger = logging.getLogger("dinov3")
 
 
-def _convert_hf_keys_to_dinov3(
-    state_dict: Dict[str, torch.Tensor],
-) -> Dict[str, torch.Tensor]:
+# Mapping from HF to DINOv3 (inverse of convert_dinov3_vit_to_hf.py)
+# We manually create this because simple dict inversion doesn't handle regex
+HF_TO_DINOV3_KEY_MAPPING = {
+    r"embeddings.cls_token": r"cls_token",
+    r"embeddings.mask_token": r"mask_token",
+    r"embeddings.register_tokens": r"storage_tokens",
+    r"embeddings.patch_embeddings": r"patch_embed.proj",
+    r"inv_freq": r"periods",
+    r"rope_embeddings": r"rope_embed",
+    r"layer.(\d+).attention.o_proj": r"blocks.\1.attn.proj",
+    r"layer.(\d+).attention.": r"blocks.\1.attn.",
+    r"layer.(\d+).layer_scale(\d+).lambda1": r"blocks.\1.ls\2.gamma",
+    r"layer.(\d+).mlp.up_proj": r"blocks.\1.mlp.fc1",
+    r"layer.(\d+).mlp.down_proj": r"blocks.\1.mlp.fc2",
+    r"layer.(\d+).mlp": r"blocks.\1.mlp",
+    r"layer.(\d+).norm": r"blocks.\1.norm",
+    r"gate_proj": r"w1",
+    r"up_proj": r"w2",
+    r"down_proj": r"w3",
+}
+
+
+def _convert_hf_keys_to_dinov3(state_dict_keys):
     """
     Convert HuggingFace DINOv3 state dict keys to native DINOv3 format.
 
-    HF DINOv3 models use different key naming conventions than the native
-    implementation. This function translates between the two formats.
+    Uses the inverse of the official ORIGINAL_TO_CONVERTED_KEY_MAPPING.
 
     Args:
-        state_dict: HuggingFace model state dict
+        state_dict_keys: List of HuggingFace model state dict keys
 
     Returns:
-        Converted state dict with DINOv3 native keys
+        Dictionary mapping old keys to new keys
     """
-    converted_state_dict = {}
-
-    for key, value in state_dict.items():
-        new_key = key
-
-        # Convert embeddings layer
-        if "embeddings.patch_embeddings.projection" in new_key:
-            new_key = new_key.replace("embeddings.patch_embeddings.projection", "patch_embed.proj")
-        elif "embeddings.cls_token" in new_key:
-            new_key = new_key.replace("embeddings.cls_token", "cls_token")
-
-        # Convert encoder blocks
-        if "encoder.layer." in new_key:
-            new_key = new_key.replace("encoder.layer.", "blocks.")
-
-        # Convert attention layers
-        if ".attention.attention.query" in new_key:
-            new_key = new_key.replace(".attention.attention.query", ".attn.qkv")
-            # Note: HF splits qkv, but DINOv3 uses fused qkv - handle specially
-            # Skip key weights, we'll handle in qkv fusion
-        elif ".attention.output.dense" in new_key:
-            new_key = new_key.replace(".attention.output.dense", ".attn.proj")
-
-        # Convert layer norms
-        if ".layernorm_before" in new_key:
-            new_key = new_key.replace(".layernorm_before", ".norm1")
-        elif ".layernorm_after" in new_key:
-            new_key = new_key.replace(".layernorm_after", ".norm2")
-
-        # Convert MLP layers
-        if ".intermediate.dense" in new_key:
-            new_key = new_key.replace(".intermediate.dense", ".mlp.fc1")
-        elif ".output.dense" in new_key:
-            new_key = new_key.replace(".output.dense", ".mlp.fc2")
-
-        converted_state_dict[new_key] = value
-
-    # Handle QKV fusion - combine separate Q, K, V weights into single qkv
-    converted_state_dict = _fuse_qkv_weights(state_dict, converted_state_dict)
-
-    return converted_state_dict
+    output_dict = {}
+    if state_dict_keys is not None:
+        old_text = "\n".join(state_dict_keys)
+        new_text = old_text
+        for pattern, replacement in HF_TO_DINOV3_KEY_MAPPING.items():
+            if replacement is None:
+                new_text = re.sub(pattern, "", new_text)
+                continue
+            new_text = re.sub(pattern, replacement, new_text)
+        output_dict = dict(zip(old_text.split("\n"), new_text.split("\n")))
+    return output_dict
 
 
-def _fuse_qkv_weights(
-    original_state_dict: Dict[str, torch.Tensor],
-    converted_state_dict: Dict[str, torch.Tensor],
-) -> Dict[str, torch.Tensor]:
+def _fuse_qkv_weights(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
-    Fuse separate Q, K, V weights from HuggingFace format into single qkv
-    weights for DINOv3.
+    Fuse separate Q, K, V weights from HuggingFace format into single qkv.
+
+    This reverses the split_qkv operation from convert_dinov3_vit_to_hf.py.
 
     Args:
-        original_state_dict: Original HF state dict with separate q, k, v
-        converted_state_dict: Partially converted state dict
+        state_dict: State dict with separate q_proj, k_proj, v_proj
 
     Returns:
         State dict with fused qkv weights
     """
-    # Find all transformer blocks
-    block_indices = set()
-    for key in original_state_dict.keys():
-        if "encoder.layer." in key:
-            parts = key.split(".")
-            if "layer" in parts:
-                layer_idx = parts[parts.index("layer") + 1]
-                try:
-                    block_indices.add(int(layer_idx))
-                except ValueError:
-                    continue
+    keys_to_fuse = [x for x in state_dict.keys() if ("q_proj" in x or "k_proj" in x or "v_proj" in x)]
 
-    # Fuse qkv for each block
-    for block_idx in block_indices:
-        # Define key patterns for q, k, v weights and biases
-        base_key = f"encoder.layer.{block_idx}.attention.attention"
-        q_weight_key = f"{base_key}.query.weight"
-        k_weight_key = f"{base_key}.key.weight"
-        v_weight_key = f"{base_key}.value.weight"
+    # Group by block and param type
+    blocks = {}
+    for key in keys_to_fuse:
+        pattern = r"blocks\.(\d+)\.attn\.(q_proj|k_proj|v_proj)\.(weight|bias)"
+        match = re.search(pattern, key)
+        if match:
+            block_idx = match.group(1)
+            proj_type = match.group(2)
+            param_type = match.group(3)
 
-        q_bias_key = f"{base_key}.query.bias"
-        k_bias_key = f"{base_key}.key.bias"
-        v_bias_key = f"{base_key}.value.bias"
+            if block_idx not in blocks:
+                blocks[block_idx] = {}
+            if param_type not in blocks[block_idx]:
+                blocks[block_idx][param_type] = {}
 
-        # Check if all qkv weights exist
-        qkv_weight_keys = [q_weight_key, k_weight_key, v_weight_key]
-        if all(key in original_state_dict for key in qkv_weight_keys):
-            # Fuse weights
-            q_weight = original_state_dict[q_weight_key]
-            k_weight = original_state_dict[k_weight_key]
-            v_weight = original_state_dict[v_weight_key]
-            qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
-            converted_state_dict[f"blocks.{block_idx}.attn.qkv.weight"] = qkv_weight
+            blocks[block_idx][param_type][proj_type] = key
 
-            # Fuse biases if they exist
-            qkv_bias_keys = [q_bias_key, k_bias_key, v_bias_key]
-            if all(key in original_state_dict for key in qkv_bias_keys):
-                q_bias = original_state_dict[q_bias_key]
-                k_bias = original_state_dict[k_bias_key]
-                v_bias = original_state_dict[v_bias_key]
-                qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
-                converted_state_dict[f"blocks.{block_idx}.attn.qkv.bias"] = qkv_bias
+    # Fuse q, k, v for each block
+    for block_idx, param_types in blocks.items():
+        for param_type, proj_keys in param_types.items():
+            if len(proj_keys) == 3:
+                q = state_dict.pop(proj_keys["q_proj"])
+                k = state_dict.pop(proj_keys["k_proj"])
+                v = state_dict.pop(proj_keys["v_proj"])
 
-    return converted_state_dict
+                qkv = torch.cat([q, k, v], dim=0)
+                new_key = f"blocks.{block_idx}.attn.qkv.{param_type}"
+                state_dict[new_key] = qkv
+
+    return state_dict
 
 
 def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) -> Dict[str, torch.Tensor]:
     """
-    Load a DINOv3 model from HuggingFace Hub and convert it to native DINOv3
-    format.
+    Load a DINOv3 model from HuggingFace Hub and convert to native format.
 
     Args:
-        model_id: HuggingFace model identifier (e.g., "facebook/dinov3-vitb16")
-        cfg: DINOv3 training configuration for architecture validation
+        model_id: HuggingFace model identifier
+                  (e.g., "facebook/dinov3-vitb16")
+        cfg: DINOv3 training configuration
         cache_dir: Optional directory to cache downloaded models
 
     Returns:
@@ -151,13 +121,34 @@ def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) 
     logger.info(f"Loading HuggingFace model: {model_id}")
 
     try:
-        # Download model files
-        model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
-        state_dict = model.state_dict()
+        # Download model
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True, cache_dir=cache_dir)
+        original_state_dict = model.state_dict()
 
-        # Convert keys to DINOv3 format
+        # Convert keys using the official mapping (inverted)
         logger.info("Converting HuggingFace keys to DINOv3 format")
-        converted_state_dict = _convert_hf_keys_to_dinov3(state_dict)
+        original_keys = list(original_state_dict.keys())
+        new_keys = _convert_hf_keys_to_dinov3(original_keys)
+
+        converted_state_dict = {}
+        for key in original_keys:
+            new_key = new_keys[key]
+            weight_tensor = original_state_dict[key]
+
+            # Skip keys not needed in DINOv3
+            if "bias_mask" in key or "local_cls_norm" in key:
+                continue
+            if "inv_freq" in new_key:
+                continue
+
+            # Handle mask token shape
+            if "mask_token" in new_key:
+                weight_tensor = weight_tensor.unsqueeze(1)
+
+            converted_state_dict[new_key] = weight_tensor
+
+        # Fuse q, k, v weights into qkv
+        converted_state_dict = _fuse_qkv_weights(converted_state_dict)
 
         logger.info(f"Successfully loaded and converted HuggingFace model {model_id}")
         logger.info(f"Model contains {len(converted_state_dict)} parameters")
@@ -165,4 +156,5 @@ def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) 
         return converted_state_dict
 
     except Exception as e:
-        raise RuntimeError(f"Failed to load HuggingFace model {model_id}: {str(e)}") from e
+        error_msg = f"Failed to load HuggingFace model {model_id}: {str(e)}"
+        raise RuntimeError(error_msg) from e

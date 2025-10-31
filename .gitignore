@@ -17,6 +17,8 @@ dist/
 # Ignore vscode directory
 .vscode/
 
+.github/
+
 # MacOS files
 .DS_Store
 

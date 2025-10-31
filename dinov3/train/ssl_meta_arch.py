@@ -350,7 +350,8 @@ class SSLMetaArch(nn.Module):
 
             # Load into student
             missing_keys, unexpected_keys = self.student.load_state_dict(state_dict, strict=False)
-            logger.info(f"CP Student loading - Missing: {len(missing_keys)}, Unexpected: {len(unexpected_keys)}")
+
+            logger.info(f"CP Student loading - Missing: {missing_keys}, Unexpected: {unexpected_keys}")
 
         self.model_ema.load_state_dict(self.student.state_dict())
         if self.has_gram_teacher:
