@@ -88,15 +88,38 @@ def _fuse_qkv_weights(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Te
 
     # Fuse q, k, v for each block
     for block_idx, param_types in blocks.items():
-        for param_type, proj_keys in param_types.items():
-            if len(proj_keys) == 3:
-                q = state_dict.pop(proj_keys["q_proj"])
-                k = state_dict.pop(proj_keys["k_proj"])
-                v = state_dict.pop(proj_keys["v_proj"])
+        # Handle weights (always all 3: q, k, v)
+        if "weight" in param_types and len(param_types["weight"]) == 3:
+            q = state_dict.pop(param_types["weight"]["q_proj"])
+            k = state_dict.pop(param_types["weight"]["k_proj"])
+            v = state_dict.pop(param_types["weight"]["v_proj"])
+            qkv = torch.cat([q, k, v], dim=0)
+            state_dict[f"blocks.{block_idx}.attn.qkv.weight"] = qkv
 
-                qkv = torch.cat([q, k, v], dim=0)
-                new_key = f"blocks.{block_idx}.attn.qkv.{param_type}"
-                state_dict[new_key] = qkv
+        # Handle biases (might only have q and v, not k)
+        if "bias" in param_types:
+            bias_keys = param_types["bias"]
+            if len(bias_keys) == 3:
+                # All three biases present
+                q_bias = state_dict.pop(bias_keys["q_proj"])
+                k_bias = state_dict.pop(bias_keys["k_proj"])
+                v_bias = state_dict.pop(bias_keys["v_proj"])
+                qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+                state_dict[f"blocks.{block_idx}.attn.qkv.bias"] = qkv_bias
+            elif len(bias_keys) == 2 and "q_proj" in bias_keys and "v_proj" in bias_keys:
+                # Only q and v biases (k has no bias)
+                q_bias = state_dict.pop(bias_keys["q_proj"])
+                v_bias = state_dict.pop(bias_keys["v_proj"])
+                # Create zero bias for k
+                k_bias = torch.zeros_like(q_bias)
+                qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+                state_dict[f"blocks.{block_idx}.attn.qkv.bias"] = qkv_bias
+            else:
+                # Unexpected bias configuration, log warning
+                logger.warning(
+                    f"Block {block_idx}: Found {len(bias_keys)} biases: "
+                    f"{list(bias_keys.keys())}. Expected 3 or q+v only."
+                )
 
     return state_dict
 
@@ -137,8 +160,6 @@ def load_huggingface_model(model_id: str, cfg, cache_dir: Optional[str] = None) 
 
             # Skip keys not needed in DINOv3
             if "bias_mask" in key or "local_cls_norm" in key:
-                continue
-            if "inv_freq" in new_key:
                 continue
 
             # Handle mask token shape
@@ -221,5 +242,13 @@ def load_huggingface_into_fsdp_model(
         if not any(skip_key in key for skip_key in skip_load_keys)
     }
 
-    model.load_state_dict(filtered_state_dict)
-    logger.info(f"Successfully loaded HF model into FSDP model")
+    # Use strict=False because rope_embed.periods is computed on-the-fly
+    # in DINOv3 and not stored in HF checkpoints
+    missing, unexpected = model.load_state_dict(filtered_state_dict, strict=False)
+
+    if missing:
+        logger.info(f"Missing keys (expected): {missing}")
+    if unexpected:
+        logger.warning(f"Unexpected keys: {unexpected}")
+
+    logger.info("Successfully loaded HF model into FSDP model")
