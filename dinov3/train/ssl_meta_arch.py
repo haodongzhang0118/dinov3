@@ -335,7 +335,7 @@ class SSLMetaArch(nn.Module):
 
             if self.cfg.cp.checkpoint_url:
                 logger.info(f"Loading pretrained weights from official checkpoint: {self.cfg.cp.checkpoint_url}")
-                if self.cfg.hf_model:
+                if self.cfg.cp.hf_model:
                     logger.warning(
                         "Both cp.checkpoint_url and hf_model are set. cp.checkpoint_url will take precedence."
                     )
