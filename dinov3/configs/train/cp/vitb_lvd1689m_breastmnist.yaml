@@ -41,7 +41,7 @@ ibot:
   head_hidden_dim: 1536  # Scaled down from 2048 for ViT-B
 train:
   batch_size_per_gpu: 64
-  dataset_path: breastmnist:split=TRAIN:root=/dtu/p1/jakambs/datasets/breastmnist:limit_data=1000
+  dataset_path: breastmnist:root=/dtu/p1/jakambs/datasets/cp:split=TRAIN:limit_data=1000
   output_dir: /dtu/p1/jakambs/dinov3_checkpoints/breastmnist/cp/vitb_im1k_breastmnist
   saveckp_freq: 20
   seed: 0
