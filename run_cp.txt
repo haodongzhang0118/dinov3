@@ -15,7 +15,7 @@ CONFIG_FILE="dinov3/configs/train/cp/vitb_lvd1689m_${DATASET}.yaml"
 DATA_PATH="/root/data/medmnist"
 
 # Output directory
-OUTPUT_DIR="./output/cp_${DATASET}"
+OUTPUT_DIR="root/output/cp_${DATASET}"
 
 # GPU settings
 NUM_GPUS=4  # Number of GPUs to use
