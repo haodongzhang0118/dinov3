@@ -8,6 +8,7 @@
 # Select dataset configuration file
 # Options: breastmnist, dermamnist, octmnist, pathmnist
 DATASET="breastmnist"
+DATASET_SIZE=1000
 CONFIG_FILE="dinov3/configs/train/cp/vitb_lvd1689m_${DATASET}.yaml"
 
 # Data root path - Change this to your data directory
@@ -15,7 +16,7 @@ CONFIG_FILE="dinov3/configs/train/cp/vitb_lvd1689m_${DATASET}.yaml"
 DATA_PATH="/root/data/medmnist"
 
 # Output directory
-OUTPUT_DIR="root/output/cp_${DATASET}"
+OUTPUT_DIR="/root/output/${DATASET_SIZE}/cp_${DATASET}"
 
 # GPU settings
 NUM_GPUS=4  # Number of GPUs to use
@@ -31,7 +32,7 @@ EXTRA_ARGS=""
 
 # Construct the dataset path with the configured DATA_PATH
 # Format: dataset_name:root=<DATA_PATH>:split=TRAIN:limit_data=1000
-DATASET_PATH="${DATASET}:root=${DATA_PATH}:split=TRAIN:limit_data=1000"
+DATASET_PATH="${DATASET}:root=${DATA_PATH}:split=TRAIN:limit_data=${DATASET_SIZE}"
 
 # =====================================
 # Start Training
