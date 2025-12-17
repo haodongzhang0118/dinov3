@@ -1,0 +1,200 @@
+#!/bin/bash
+# Batch training script for all MedMNIST datasets with different sample sizes
+# This script will run training experiments for each dataset and sample size combination
+
+# =====================================
+# Configuration
+# =====================================
+
+# List of datasets to train (in order)
+DATASETS=(
+    "breastmnist"
+    "octmnist"
+    "dermamnist"
+    "pneumoniamnist"
+    "retinamnist"
+    "bloodmnist"
+    "organamnist"
+    "organcmnist"
+    "organsmnist"
+    "pathmnist"
+    "chestmnist"
+    "tissuemnist"
+)
+
+# List of sample sizes to train
+SAMPLE_SIZES=(10 100 250 500 1000)
+
+# Data root path
+DATA_PATH="/root/data/medmnist"
+
+# GPU settings
+NUM_GPUS=1
+
+# Base output directory
+BASE_OUTPUT_DIR="/root/output"
+
+# Log directory
+LOG_DIR="${BASE_OUTPUT_DIR}/logs"
+mkdir -p ${LOG_DIR}
+
+# =====================================
+# Training Loop
+# =====================================
+
+echo "=========================================="
+echo "Starting Batch Training Experiments"
+echo "=========================================="
+echo "Total datasets: ${#DATASETS[@]}"
+echo "Sample sizes: ${SAMPLE_SIZES[@]}"
+echo "Total experiments: $((${#DATASETS[@]} * ${#SAMPLE_SIZES[@]}))"
+echo "=========================================="
+echo ""
+
+# Counter for tracking progress
+TOTAL_EXPERIMENTS=$((${#DATASETS[@]} * ${#SAMPLE_SIZES[@]}))
+CURRENT_EXPERIMENT=0
+
+# Start time
+START_TIME=$(date +%s)
+
+# Loop through each dataset
+for DATASET in "${DATASETS[@]}"; do
+    echo ""
+    echo "=========================================="
+    echo "Processing Dataset: ${DATASET}"
+    echo "=========================================="
+    
+    # Loop through each sample size
+    for SAMPLE_SIZE in "${SAMPLE_SIZES[@]}"; do
+        CURRENT_EXPERIMENT=$((CURRENT_EXPERIMENT + 1))
+        
+        echo ""
+        echo "----------------------------------------"
+        echo "Experiment ${CURRENT_EXPERIMENT}/${TOTAL_EXPERIMENTS}"
+        echo "Dataset: ${DATASET}"
+        echo "Sample Size: ${SAMPLE_SIZE}"
+        echo "----------------------------------------"
+        
+        # Configuration
+        CONFIG_FILE="dinov3/configs/train/cp/vitb_lvd1689m_${DATASET}.yaml"
+        OUTPUT_DIR="${BASE_OUTPUT_DIR}/${SAMPLE_SIZE}/cp_${DATASET}"
+        DATASET_PATH="${DATASET}:root=${DATA_PATH}:split=TRAIN:limit_data=${SAMPLE_SIZE}"
+        LOG_FILE="${LOG_DIR}/${DATASET}_${SAMPLE_SIZE}.log"
+        
+        # Check if config file exists
+        if [ ! -f "${CONFIG_FILE}" ]; then
+            echo "ERROR: Config file not found: ${CONFIG_FILE}"
+            echo "Skipping this experiment..."
+            continue
+        fi
+        
+        # Create output directory
+        mkdir -p ${OUTPUT_DIR}
+        
+        # Print experiment info
+        echo "Config: ${CONFIG_FILE}"
+        echo "Output: ${OUTPUT_DIR}"
+        echo "Dataset Path: ${DATASET_PATH}"
+        echo "Log: ${LOG_FILE}"
+        echo ""
+        
+        # Run training
+        echo "Starting training at $(date)..."
+        
+        if [ ${NUM_GPUS} -eq 1 ]; then
+            # Single GPU training
+            python dinov3/train/train.py \
+                --config-file ${CONFIG_FILE} \
+                --output-dir ${OUTPUT_DIR} \
+                train.dataset_path=${DATASET_PATH} \
+                2>&1 | tee ${LOG_FILE}
+        else
+            # Multi-GPU training
+            torchrun --nproc_per_node=${NUM_GPUS} \
+                dinov3/train/train.py \
+                --config-file ${CONFIG_FILE} \
+                --output-dir ${OUTPUT_DIR} \
+                train.dataset_path=${DATASET_PATH} \
+                2>&1 | tee ${LOG_FILE}
+        fi
+        
+        # Check if training was successful
+        if [ $? -eq 0 ]; then
+            echo "✓ Training completed successfully!"
+            echo "SUCCESS" >> ${LOG_FILE}
+        else
+            echo "✗ Training failed with error code $?"
+            echo "FAILED" >> ${LOG_FILE}
+            echo "Check log file for details: ${LOG_FILE}"
+        fi
+        
+        echo "Finished at $(date)"
+        echo ""
+        
+        # Calculate and display progress
+        ELAPSED_TIME=$(($(date +%s) - START_TIME))
+        AVG_TIME_PER_EXP=$((ELAPSED_TIME / CURRENT_EXPERIMENT))
+        REMAINING_EXP=$((TOTAL_EXPERIMENTS - CURRENT_EXPERIMENT))
+        EST_REMAINING_TIME=$((AVG_TIME_PER_EXP * REMAINING_EXP))
+        
+        echo "Progress: ${CURRENT_EXPERIMENT}/${TOTAL_EXPERIMENTS} experiments completed"
+        echo "Elapsed time: $((ELAPSED_TIME / 3600))h $(((ELAPSED_TIME % 3600) / 60))m"
+        echo "Estimated remaining time: $((EST_REMAINING_TIME / 3600))h $(((EST_REMAINING_TIME % 3600) / 60))m"
+        echo ""
+    done
+    
+    echo "✓ Completed all experiments for ${DATASET}"
+    echo ""
+done
+
+# =====================================
+# Summary
+# =====================================
+
+END_TIME=$(date +%s)
+TOTAL_TIME=$((END_TIME - START_TIME))
+
+echo ""
+echo "=========================================="
+echo "All Experiments Completed!"
+echo "=========================================="
+echo "Total experiments: ${TOTAL_EXPERIMENTS}"
+echo "Total time: $((TOTAL_TIME / 3600))h $(((TOTAL_TIME % 3600) / 60))m $((TOTAL_TIME % 60))s"
+echo "Logs saved to: ${LOG_DIR}"
+echo "=========================================="
+echo ""
+
+# Generate summary report
+SUMMARY_FILE="${LOG_DIR}/summary.txt"
+echo "Generating summary report: ${SUMMARY_FILE}"
+echo "=========================================="
+echo "Training Summary Report" > ${SUMMARY_FILE}
+echo "Generated at: $(date)" >> ${SUMMARY_FILE}
+echo "=========================================="  >> ${SUMMARY_FILE}
+echo "" >> ${SUMMARY_FILE}
+
+for DATASET in "${DATASETS[@]}"; do
+    echo "Dataset: ${DATASET}" >> ${SUMMARY_FILE}
+    for SAMPLE_SIZE in "${SAMPLE_SIZES[@]}"; do
+        LOG_FILE="${LOG_DIR}/${DATASET}_${SAMPLE_SIZE}.log"
+        if [ -f "${LOG_FILE}" ]; then
+            if grep -q "SUCCESS" ${LOG_FILE}; then
+                echo "  - Sample size ${SAMPLE_SIZE}: ✓ SUCCESS" >> ${SUMMARY_FILE}
+            elif grep -q "FAILED" ${LOG_FILE}; then
+                echo "  - Sample size ${SAMPLE_SIZE}: ✗ FAILED" >> ${SUMMARY_FILE}
+            else
+                echo "  - Sample size ${SAMPLE_SIZE}: ? UNKNOWN" >> ${SUMMARY_FILE}
+            fi
+        else
+            echo "  - Sample size ${SAMPLE_SIZE}: - NOT RUN" >> ${SUMMARY_FILE}
+        fi
+    done
+    echo "" >> ${SUMMARY_FILE}
+done
+
+echo ""
+echo "Summary report saved to: ${SUMMARY_FILE}"
+echo ""
+cat ${SUMMARY_FILE}
+

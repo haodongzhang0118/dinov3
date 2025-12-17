@@ -7,3 +7,6 @@ termcolor
 torch
 torchmetrics
 torchvision
+transformers
+datasets
+medmnist

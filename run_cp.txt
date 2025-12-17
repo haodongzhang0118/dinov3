@@ -20,7 +20,7 @@ DATA_PATH="/root/data/medmnist"
 OUTPUT_DIR="/root/output/${DATASET_SIZE}/cp_${DATASET}"
 
 # GPU settings
-NUM_GPUS=4  # Number of GPUs to use
+NUM_GPUS=1 # Number of GPUs to use
 
 # Optional: Override parameters in config file
 EXTRA_ARGS=""
