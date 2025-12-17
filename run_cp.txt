@@ -4,6 +4,7 @@
 # =====================================
 # Configuration Section - Modify according to your needs
 # =====================================
+export HF_TOKEN=""
 
 # Select dataset configuration file
 # Options: breastmnist, dermamnist, octmnist, pathmnist
