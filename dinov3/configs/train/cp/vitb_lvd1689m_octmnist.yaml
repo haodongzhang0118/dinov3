@@ -41,8 +41,10 @@ ibot:
   head_hidden_dim: 1536  # Scaled down from 2048 for ViT-B
 train:
   batch_size_per_gpu: 64
-  dataset_path: octmnist:split=TRAIN:root=/dtu/p1/jakambs/datasets/cp:limit_data=1000
-  output_dir: /dtu/p1/jakambs/dinov3_checkpoints/octmnist/cp/vitb_im1k_octmnist
+  # Dataset path format: dataset_name:root=<path>:split=TRAIN:limit_data=<num>
+  # This can be overridden by run_cp_training.sh script via train.dataset_path parameter
+  dataset_path: octmnist:root=/root/data/medmnist:split=TRAIN:limit_data=1000
+  output_dir: /root/dinov3/output/octmnist
   saveckp_freq: 20
   seed: 0
   num_workers: 10

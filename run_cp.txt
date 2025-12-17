@@ -1,0 +1,78 @@
+#!/bin/bash
+# DINOv3 Continue Pretraining (CP) Training Script
+
+# =====================================
+# Configuration Section - Modify according to your needs
+# =====================================
+
+# Select dataset configuration file
+# Options: breastmnist, dermamnist, octmnist, pathmnist
+DATASET="breastmnist"
+CONFIG_FILE="dinov3/configs/train/cp/vitb_lvd1689m_${DATASET}.yaml"
+
+# Data root path - Change this to your data directory
+# This will override the 'root' parameter in dataset_path
+DATA_PATH="/root/data/medmnist"
+
+# Output directory
+OUTPUT_DIR="./output/cp_${DATASET}"
+
+# GPU settings
+NUM_GPUS=4  # Number of GPUs to use
+
+# Optional: Override parameters in config file
+EXTRA_ARGS=""
+# Example: Change number of epochs
+# EXTRA_ARGS="optim.epochs=50"
+# Example: Change learning rate
+# EXTRA_ARGS="optim.lr=0.0005"
+# Example: Limit training data size
+# EXTRA_ARGS="train.limit_data=2000"
+
+# Construct the dataset path with the configured DATA_PATH
+# Format: dataset_name:root=<DATA_PATH>:split=TRAIN:limit_data=1000
+DATASET_PATH="${DATASET}:root=${DATA_PATH}:split=TRAIN:limit_data=1000"
+
+# =====================================
+# Start Training
+# =====================================
+
+echo "=========================================="
+echo "DINOv3 Continue Pretraining"
+echo "=========================================="
+echo "Dataset: ${DATASET}"
+echo "Config: ${CONFIG_FILE}"
+echo "Data Path: ${DATA_PATH}"
+echo "Dataset Path: ${DATASET_PATH}"
+echo "Output: ${OUTPUT_DIR}"
+echo "GPUs: ${NUM_GPUS}"
+echo "=========================================="
+
+# Create output directory
+mkdir -p ${OUTPUT_DIR}
+
+# Run training
+if [ ${NUM_GPUS} -eq 1 ]; then
+    # Single GPU training
+    echo "Running single GPU training..."
+    python dinov3/train/train.py \
+        --config-file ${CONFIG_FILE} \
+        --output-dir ${OUTPUT_DIR} \
+        train.dataset_path=${DATASET_PATH} \
+        ${EXTRA_ARGS}
+else
+    # Multi-GPU training
+    echo "Running multi-GPU training with ${NUM_GPUS} GPUs..."
+    torchrun --nproc_per_node=${NUM_GPUS} \
+        dinov3/train/train.py \
+        --config-file ${CONFIG_FILE} \
+        --output-dir ${OUTPUT_DIR} \
+        train.dataset_path=${DATASET_PATH} \
+        ${EXTRA_ARGS}
+fi
+
+echo "=========================================="
+echo "Training completed!"
+echo "Checkpoints saved to: ${OUTPUT_DIR}"
+echo "=========================================="
+
