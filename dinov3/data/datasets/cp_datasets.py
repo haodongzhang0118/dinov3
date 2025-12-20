@@ -17,6 +17,8 @@ def is_cp_dataset(s: str) -> bool:
     supported_datasets = [
         "food101",
         "fgvc_aircraft",
+        "bloodmnist",
+        "tissuemnist",
         "pathmnist",
         "chestmnist",
         "dermamnist",
@@ -207,6 +209,23 @@ DATASET_STATS = {
         "is_rgb": True,
         "num_classes": 100,
     },
+    
+    "bloodmnist": {
+        "mean": (0.5, 0.5, 0.5),
+        "std": (0.5, 0.5, 0.5),
+        "input_size": 224,
+        "is_rgb": True,
+        "num_classes": 8,
+    },
+
+    "tissuemnist": {
+        "mean": (0.5,),
+        "std": (0.5,),
+        "input_size": 224,
+        "is_rgb": False,
+        "num_classes": 8,
+    },
+
     "pathmnist": {
         "mean": (0.5, 0.5, 0.5),
         "std": (0.5, 0.5, 0.5),

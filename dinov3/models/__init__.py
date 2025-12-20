@@ -107,7 +107,7 @@ def build_model_for_eval(
         # Move to CUDA
         model.to_empty(device="cuda")
         # Load checkpoint
-        load_checkpoint(pretrained_weights, model=moduledict, strict_loading=True)
+        load_checkpoint(pretrained_weights, model=moduledict, strict_loading=False)
         shard_unsharded_model = False
     else:
         logger.info("PyTorch consolidated checkpoint")
