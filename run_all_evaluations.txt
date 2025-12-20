@@ -1,0 +1,381 @@
+#!/bin/bash
+# Evaluation script for all trained MedMNIST models
+# This script runs KNN and Linear Probe evaluations on all trained checkpoints
+
+# =====================================
+# Configuration
+# =====================================
+
+# List of datasets (same order as training)
+DATASETS=(
+    "breastmnist"
+    "octmnist"
+    "dermamnist"
+    "pneumoniamnist"
+    "retinamnist"
+    "bloodmnist"
+    "organamnist"
+    "organcmnist"
+    "organsmnist"
+    "pathmnist"
+    "chestmnist"
+    "tissuemnist"
+)
+
+# List of sample sizes
+SAMPLE_SIZES=(10 100 250 500 1000 5000 10000)
+
+# Data root path
+DATA_PATH="/root/data/medmnist"
+
+# Base directories
+BASE_OUTPUT_DIR="/root/output"
+EVAL_OUTPUT_DIR="${BASE_OUTPUT_DIR}/eval_results"
+LOG_DIR="${EVAL_OUTPUT_DIR}/logs"
+
+# Create directories
+mkdir -p ${EVAL_OUTPUT_DIR}
+mkdir -p ${LOG_DIR}
+
+# Evaluation types to run
+RUN_KNN=true
+RUN_LINEAR=true
+
+# GPU settings
+NUM_GPUS=1
+
+# =====================================
+# Helper Functions
+# =====================================
+
+# Function to check if checkpoint exists
+check_checkpoint() {
+    local model_dir=$1
+    local ckpt_path="${model_dir}/ckpt/final/__0_0.distcp"
+    
+    if [ -f "${ckpt_path}" ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+# Function to get config file path
+get_config_path() {
+    local model_dir=$1
+    echo "${model_dir}/config.yaml"
+}
+
+# Function to run KNN evaluation
+run_knn_eval() {
+    local dataset=$1
+    local sample_size=$2
+    local model_dir=$3
+    local output_dir=$4
+    local log_file=$5
+    
+    echo "  Running KNN evaluation..."
+    
+    local config_file=$(get_config_path ${model_dir})
+    local checkpoint_path="${model_dir}/ckpt/final"
+    local train_dataset="${dataset}:root=${DATA_PATH}:split=TRAIN:limit_data=${sample_size}"
+    local test_dataset="${dataset}:root=${DATA_PATH}:split=TEST"
+    
+    python dinov3/eval/knn.py \
+        output_dir=${output_dir} \
+        model.config_file=${config_file} \
+        model.pretrained_weights=${checkpoint_path} \
+        train.dataset=${train_dataset} \
+        eval.test_dataset=${test_dataset} \
+        train.batch_size=256 \
+        eval.batch_size=256 \
+        2>&1 | tee -a ${log_file}
+    
+    local exit_code=$?
+    if [ ${exit_code} -eq 0 ]; then
+        echo "    ✓ KNN evaluation completed successfully"
+        return 0
+    else
+        echo "    ✗ KNN evaluation failed with error code ${exit_code}"
+        return 1
+    fi
+}
+
+# Function to run Linear Probe evaluation
+run_linear_eval() {
+    local dataset=$1
+    local sample_size=$2
+    local model_dir=$3
+    local output_dir=$4
+    local log_file=$5
+    
+    echo "  Running Linear Probe evaluation..."
+    
+    local config_file=$(get_config_path ${model_dir})
+    local checkpoint_path="${model_dir}/ckpt/final"
+    local train_dataset="${dataset}:root=${DATA_PATH}:split=TRAIN:limit_data=${sample_size}"
+    local val_dataset="${dataset}:root=${DATA_PATH}:split=VAL"
+    local test_dataset="${dataset}:root=${DATA_PATH}:split=TEST"
+    
+    python dinov3/eval/linear.py \
+        output_dir=${output_dir} \
+        model.config_file=${config_file} \
+        model.pretrained_weights=${checkpoint_path} \
+        train.dataset=${train_dataset} \
+        train.val_dataset=${val_dataset} \
+        eval.test_datasets=[${test_dataset}] \
+        train.batch_size=128 \
+        eval.batch_size=256 \
+        train.epochs=10 \
+        2>&1 | tee -a ${log_file}
+    
+    local exit_code=$?
+    if [ ${exit_code} -eq 0 ]; then
+        echo "    ✓ Linear Probe evaluation completed successfully"
+        return 0
+    else
+        echo "    ✗ Linear Probe evaluation failed with error code ${exit_code}"
+        return 1
+    fi
+}
+
+# =====================================
+# Main Evaluation Loop
+# =====================================
+
+echo "=========================================="
+echo "Starting Batch Evaluation"
+echo "=========================================="
+echo "Total datasets: ${#DATASETS[@]}"
+echo "Sample sizes: ${SAMPLE_SIZES[@]}"
+echo "Evaluation types: KNN=${RUN_KNN}, Linear=${RUN_LINEAR}"
+echo "=========================================="
+echo ""
+
+# Initialize counters
+TOTAL_MODELS=0
+EVALUATED_MODELS=0
+SKIPPED_MODELS=0
+KNN_SUCCESS=0
+KNN_FAILED=0
+LINEAR_SUCCESS=0
+LINEAR_FAILED=0
+
+# Start time
+START_TIME=$(date +%s)
+
+# Count total models first
+for DATASET in "${DATASETS[@]}"; do
+    for SAMPLE_SIZE in "${SAMPLE_SIZES[@]}"; do
+        MODEL_DIR="${BASE_OUTPUT_DIR}/${SAMPLE_SIZE}/cp_${DATASET}"
+        if [ -d "${MODEL_DIR}" ]; then
+            HAS_CKPT=$(check_checkpoint ${MODEL_DIR})
+            if [ "${HAS_CKPT}" == "true" ]; then
+                TOTAL_MODELS=$((TOTAL_MODELS + 1))
+            fi
+        fi
+    done
+done
+
+echo "Found ${TOTAL_MODELS} trained models to evaluate"
+echo ""
+
+# Loop through each dataset
+for DATASET in "${DATASETS[@]}"; do
+    echo ""
+    echo "=========================================="
+    echo "Processing Dataset: ${DATASET}"
+    echo "=========================================="
+    
+    # Loop through each sample size
+    for SAMPLE_SIZE in "${SAMPLE_SIZES[@]}"; do
+        echo ""
+        echo "----------------------------------------"
+        echo "Dataset: ${DATASET}"
+        echo "Sample Size: ${SAMPLE_SIZE}"
+        echo "----------------------------------------"
+        
+        # Model directory
+        MODEL_DIR="${BASE_OUTPUT_DIR}/${SAMPLE_SIZE}/cp_${DATASET}"
+        
+        # Check if model directory exists
+        if [ ! -d "${MODEL_DIR}" ]; then
+            echo "  Model directory not found: ${MODEL_DIR}"
+            echo "  Skipping..."
+            SKIPPED_MODELS=$((SKIPPED_MODELS + 1))
+            continue
+        fi
+        
+        # Check if checkpoint exists (it's a file, not a directory)
+        CKPT_PATH="${MODEL_DIR}/ckpt/final/__0_0.distcp"
+        if [ -f "${CKPT_PATH}" ]; then
+            echo "  ✓ Found checkpoint: ${CKPT_PATH}"
+        else
+            echo "  ✗ Checkpoint not found: ${CKPT_PATH}"
+            echo "  Skipping..."
+            SKIPPED_MODELS=$((SKIPPED_MODELS + 1))
+            continue
+        fi
+        
+        EVALUATED_MODELS=$((EVALUATED_MODELS + 1))
+        echo "  ✓ Found trained model (${EVALUATED_MODELS}/${TOTAL_MODELS})"
+        
+        # Create evaluation output directories
+        EVAL_BASE_DIR="${EVAL_OUTPUT_DIR}/${SAMPLE_SIZE}/${DATASET}"
+        KNN_OUTPUT_DIR="${EVAL_BASE_DIR}/knn"
+        LINEAR_OUTPUT_DIR="${EVAL_BASE_DIR}/linear"
+        
+        mkdir -p ${KNN_OUTPUT_DIR}
+        mkdir -p ${LINEAR_OUTPUT_DIR}
+        
+        # Log files
+        KNN_LOG="${LOG_DIR}/knn_${DATASET}_${SAMPLE_SIZE}.log"
+        LINEAR_LOG="${LOG_DIR}/linear_${DATASET}_${SAMPLE_SIZE}.log"
+        
+        # Run KNN evaluation
+        if [ "${RUN_KNN}" = true ]; then
+            echo ""
+            run_knn_eval ${DATASET} ${SAMPLE_SIZE} ${MODEL_DIR} ${KNN_OUTPUT_DIR} ${KNN_LOG}
+            if [ $? -eq 0 ]; then
+                KNN_SUCCESS=$((KNN_SUCCESS + 1))
+            else
+                KNN_FAILED=$((KNN_FAILED + 1))
+            fi
+        fi
+        
+        # Run Linear Probe evaluation
+        if [ "${RUN_LINEAR}" = true ]; then
+            echo ""
+            run_linear_eval ${DATASET} ${SAMPLE_SIZE} ${MODEL_DIR} ${LINEAR_OUTPUT_DIR} ${LINEAR_LOG}
+            if [ $? -eq 0 ]; then
+                LINEAR_SUCCESS=$((LINEAR_SUCCESS + 1))
+            else
+                LINEAR_FAILED=$((LINEAR_FAILED + 1))
+            fi
+        fi
+        
+        echo ""
+        echo "  Completed evaluations for ${DATASET} (sample size: ${SAMPLE_SIZE})"
+        
+        # Calculate and display progress
+        ELAPSED_TIME=$(($(date +%s) - START_TIME))
+        if [ ${EVALUATED_MODELS} -gt 0 ]; then
+            AVG_TIME_PER_MODEL=$((ELAPSED_TIME / EVALUATED_MODELS))
+            REMAINING_MODELS=$((TOTAL_MODELS - EVALUATED_MODELS))
+            EST_REMAINING_TIME=$((AVG_TIME_PER_MODEL * REMAINING_MODELS))
+            
+            echo ""
+            echo "  Progress: ${EVALUATED_MODELS}/${TOTAL_MODELS} models evaluated"
+            echo "  Elapsed time: $((ELAPSED_TIME / 3600))h $(((ELAPSED_TIME % 3600) / 60))m"
+            echo "  Estimated remaining: $((EST_REMAINING_TIME / 3600))h $(((EST_REMAINING_TIME % 3600) / 60))m"
+        fi
+        echo ""
+    done
+    
+    echo "✓ Completed all evaluations for ${DATASET}"
+    echo ""
+done
+
+# =====================================
+# Summary
+# =====================================
+
+END_TIME=$(date +%s)
+TOTAL_TIME=$((END_TIME - START_TIME))
+
+echo ""
+echo "=========================================="
+echo "All Evaluations Completed!"
+echo "=========================================="
+echo "Total models found: ${TOTAL_MODELS}"
+echo "Models evaluated: ${EVALUATED_MODELS}"
+echo "Models skipped: ${SKIPPED_MODELS}"
+echo ""
+if [ "${RUN_KNN}" = true ]; then
+    echo "KNN Evaluations:"
+    echo "  - Success: ${KNN_SUCCESS}"
+    echo "  - Failed: ${KNN_FAILED}"
+fi
+if [ "${RUN_LINEAR}" = true ]; then
+    echo "Linear Probe Evaluations:"
+    echo "  - Success: ${LINEAR_SUCCESS}"
+    echo "  - Failed: ${LINEAR_FAILED}"
+fi
+echo ""
+echo "Total time: $((TOTAL_TIME / 3600))h $(((TOTAL_TIME % 3600) / 60))m $((TOTAL_TIME % 60))s"
+echo "Results saved to: ${EVAL_OUTPUT_DIR}"
+echo "Logs saved to: ${LOG_DIR}"
+echo "=========================================="
+echo ""
+
+# =====================================
+# Generate Summary Report
+# =====================================
+
+SUMMARY_FILE="${EVAL_OUTPUT_DIR}/evaluation_summary.txt"
+echo "Generating summary report: ${SUMMARY_FILE}"
+
+echo "==========================================" > ${SUMMARY_FILE}
+echo "Evaluation Summary Report" >> ${SUMMARY_FILE}
+echo "Generated at: $(date)" >> ${SUMMARY_FILE}
+echo "==========================================" >> ${SUMMARY_FILE}
+echo "" >> ${SUMMARY_FILE}
+echo "Configuration:" >> ${SUMMARY_FILE}
+echo "  - KNN Evaluation: ${RUN_KNN}" >> ${SUMMARY_FILE}
+echo "  - Linear Probe Evaluation: ${RUN_LINEAR}" >> ${SUMMARY_FILE}
+echo "  - Data Path: ${DATA_PATH}" >> ${SUMMARY_FILE}
+echo "" >> ${SUMMARY_FILE}
+echo "Summary Statistics:" >> ${SUMMARY_FILE}
+echo "  - Total models: ${TOTAL_MODELS}" >> ${SUMMARY_FILE}
+echo "  - Evaluated: ${EVALUATED_MODELS}" >> ${SUMMARY_FILE}
+echo "  - Skipped: ${SKIPPED_MODELS}" >> ${SUMMARY_FILE}
+if [ "${RUN_KNN}" = true ]; then
+    echo "  - KNN Success: ${KNN_SUCCESS}" >> ${SUMMARY_FILE}
+    echo "  - KNN Failed: ${KNN_FAILED}" >> ${SUMMARY_FILE}
+fi
+if [ "${RUN_LINEAR}" = true ]; then
+    echo "  - Linear Success: ${LINEAR_SUCCESS}" >> ${SUMMARY_FILE}
+    echo "  - Linear Failed: ${LINEAR_FAILED}" >> ${SUMMARY_FILE}
+fi
+echo "  - Total time: $((TOTAL_TIME / 3600))h $(((TOTAL_TIME % 3600) / 60))m" >> ${SUMMARY_FILE}
+echo "" >> ${SUMMARY_FILE}
+echo "==========================================" >> ${SUMMARY_FILE}
+echo "Detailed Results by Dataset and Sample Size" >> ${SUMMARY_FILE}
+echo "==========================================" >> ${SUMMARY_FILE}
+echo "" >> ${SUMMARY_FILE}
+
+for DATASET in "${DATASETS[@]}"; do
+    echo "Dataset: ${DATASET}" >> ${SUMMARY_FILE}
+    for SAMPLE_SIZE in "${SAMPLE_SIZES[@]}"; do
+        KNN_RESULT_FILE="${EVAL_OUTPUT_DIR}/${SAMPLE_SIZE}/${DATASET}/knn/results-knn.csv"
+        LINEAR_RESULT_FILE="${EVAL_OUTPUT_DIR}/${SAMPLE_SIZE}/${DATASET}/linear/results-linear.csv"
+        
+        echo -n "  Sample size ${SAMPLE_SIZE}: " >> ${SUMMARY_FILE}
+        
+        if [ -f "${KNN_RESULT_FILE}" ] || [ -f "${LINEAR_RESULT_FILE}" ]; then
+            if [ -f "${KNN_RESULT_FILE}" ]; then
+                echo -n "KNN ✓ " >> ${SUMMARY_FILE}
+            else
+                echo -n "KNN ✗ " >> ${SUMMARY_FILE}
+            fi
+            if [ -f "${LINEAR_RESULT_FILE}" ]; then
+                echo "Linear ✓" >> ${SUMMARY_FILE}
+            else
+                echo "Linear ✗" >> ${SUMMARY_FILE}
+            fi
+        else
+            echo "Not evaluated" >> ${SUMMARY_FILE}
+        fi
+    done
+    echo "" >> ${SUMMARY_FILE}
+done
+
+echo ""
+echo "Summary report saved to: ${SUMMARY_FILE}"
+echo ""
+cat ${SUMMARY_FILE}
+
+echo ""
+echo "=========================================="
+echo "Evaluation script completed!"
+echo "=========================================="

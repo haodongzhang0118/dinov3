@@ -23,7 +23,7 @@ DATASETS=(
 )
 
 # List of sample sizes to train
-SAMPLE_SIZES=(10 100 250 500 1000)
+SAMPLE_SIZES=(10 100 250 500 1000 5000 10000)
 
 # Data root path
 DATA_PATH="/root/data/medmnist"
