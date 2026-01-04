@@ -5,6 +5,8 @@
 # =====================================
 # Configuration
 # =====================================
+export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
 
 # List of datasets to train (in order)
 DATASETS=(
