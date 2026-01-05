@@ -9,4 +9,7 @@ torchmetrics
 torchvision
 transformers
 datasets
+wandb
+timm
+matplotlib
 medmnist
